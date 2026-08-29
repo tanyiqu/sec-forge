@@ -6,9 +6,10 @@ import sys
 from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
-from PyQt6.QtGui import QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
+from PyQt6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
+from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
 from resources import CLOSE_ICON_PATH, LOGO_PATH, MAXIMIZE_ICON_PATH, MINIMIZE_ICON_PATH
 
@@ -130,12 +131,12 @@ class TitleBar(QFrame):
 class SettingsDialog(QDialog):
     """使用应用主题的模态系统设置窗口。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, config_store: ConfigStore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._config_store = config_store
         self.setWindowTitle("系统设置")
         self.setModal(True)
-        self.setMinimumSize(620, 420)
-        self.resize(700, 480)
+        self.setFixedSize(400, 525)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._build_ui()
@@ -153,8 +154,14 @@ class SettingsDialog(QDialog):
         body.setSpacing(18)
         tabs = QTabWidget()
         tabs.setObjectName("settingsTabs")
-        # 选项卡先保留为空，后续设置项可按功能分组添加到对应页面。
-        tabs.addTab(QWidget(), "常规")
+        general_page = QWidget()
+        general_layout = QVBoxLayout(general_page)
+        general_layout.setContentsMargins(22, 22, 22, 22)
+        general_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._minimize_to_tray_checkbox = QCheckBox("关闭窗口时最小化到系统托盘")
+        self._minimize_to_tray_checkbox.setChecked(self._config_store.minimize_to_tray_on_close())
+        general_layout.addWidget(self._minimize_to_tray_checkbox)
+        tabs.addTab(general_page, "常规")
         tabs.addTab(QWidget(), "环境")
         tabs.addTab(QWidget(), "关于")
         body.addWidget(tabs, 1)
@@ -168,7 +175,7 @@ class SettingsDialog(QDialog):
         action_row.addWidget(reset_button)
         action_row.addStretch()
         save_button = QPushButton("保存")
-        save_button.clicked.connect(self.accept)
+        save_button.clicked.connect(self._save_settings)
         cancel_button = QPushButton("取消")
         cancel_button.setObjectName("secondaryButton")
         cancel_button.clicked.connect(self.reject)
@@ -196,6 +203,9 @@ class SettingsDialog(QDialog):
             #settingsTabs::tab { min-width: 74px; padding: 10px 18px; color: #6b7789; background: transparent; border: none; border-bottom: 2px solid transparent; font-weight: 600; }
             #settingsTabs::tab:hover { color: #1677e8; background: #f4f8fe; }
             #settingsTabs::tab:selected { color: #1677e8; border-bottom-color: #1677e8; }
+            QCheckBox { color: #243047; font-size: 14px; spacing: 8px; }
+            QCheckBox::indicator { width: 17px; height: 17px; border: 1px solid #b9c5d5; border-radius: 4px; background: #ffffff; }
+            QCheckBox::indicator:checked { background: #1677e8; border-color: #1677e8; }
             QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; }
             QPushButton:hover { background: #3689ec; }
             #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; }
@@ -203,10 +213,15 @@ class SettingsDialog(QDialog):
         """)
 
     def _reset_settings(self) -> None:
-        """为后续设置项预留统一重置入口；当前页面尚无可重置字段。"""
+        """将页面中的设置项恢复为默认值，等待用户确认保存。"""
 
-        # 现在不写入任何配置，避免在尚未定义设置模型时产生隐式副作用。
-        return
+        self._minimize_to_tray_checkbox.setChecked(True)
+
+    def _save_settings(self) -> None:
+        """保存当前设置并关闭对话框。"""
+
+        self._config_store.set_minimize_to_tray_on_close(self._minimize_to_tray_checkbox.isChecked())
+        self.accept()
 
 
 class MainWindow(QMainWindow):
@@ -215,8 +230,11 @@ class MainWindow(QMainWindow):
     _SIDEBAR_WIDTH = 220
     _RESIZE_BORDER_WIDTH = 8
 
-    def __init__(self) -> None:
+    def __init__(self, config_store: ConfigStore | None = None, *, system_tray_available: bool = False) -> None:
         super().__init__()
+        self._config_store = config_store or ConfigStore()
+        self._config_store.ensure_config_files()
+        self._system_tray_available = system_tray_available
         self.setWindowTitle("SecForge · 网安工具箱")
         self.setMinimumSize(950, 600)
         self.resize(1180, 740)
@@ -290,7 +308,9 @@ class MainWindow(QMainWindow):
         sidebar = QListWidget()
         sidebar.setObjectName("sidebar")
         sidebar.viewport().setAutoFillBackground(False)
-        sidebar.addItems(["▦  全部工具 (0)", "★  我的收藏", "◷  最近使用", "────────────", "▣  信息收集 (0)", "▣  漏洞扫描 (0)", "▣  Web 工具 (0)", "▣  密码工具 (0)", "▣  其他工具 (0)"])
+        # 分类菜单由 config/categories.json 决定，后续编辑分类时可直接复用此数据源。
+        category_items = [f"▣  {name} (0)" for name in self._config_store.load_category_names()]
+        sidebar.addItems(["▦  全部工具 (0)", "★  我的收藏", "◷  最近使用", "────────────", *category_items])
         sidebar.setCurrentRow(0)
         sidebar_layout.addWidget(sidebar)
         layout.addWidget(sidebar_panel)
@@ -365,4 +385,13 @@ class MainWindow(QMainWindow):
             self.showNormal()
         self.raise_()
         self.activateWindow()
-        SettingsDialog(self).exec()
+        SettingsDialog(self._config_store, self).exec()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """按已保存的常规设置决定关闭主窗口时的行为。"""
+
+        if self._system_tray_available and self._config_store.minimize_to_tray_on_close():
+            self.hide()
+            event.ignore()
+            return
+        event.accept()

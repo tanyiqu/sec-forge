@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "general": {
+    "minimize_to_tray_on_close": false
+  }
+}

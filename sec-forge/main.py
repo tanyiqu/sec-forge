@@ -13,20 +13,25 @@ def main() -> int:
         print("SecForge 需要 PyQt6。请先安装项目声明的依赖后再启动。", file=sys.stderr)
         return 1
 
+    from config_store import ConfigStore
     from main_window import MainWindow
     from resources import LOGO_PATH
 
     app = QApplication(sys.argv)
     app.setApplicationName("SecForge")
     app.setOrganizationName("SecForge")
-    app.setQuitOnLastWindowClosed(False)
+    # 主窗口真正关闭时应结束应用；最小化到托盘会在 closeEvent 中忽略关闭事件。
+    app.setQuitOnLastWindowClosed(True)
+    config_store = ConfigStore()
+    config_store.ensure_config_files()
     # 任务栏和系统托盘共用应用资源目录内的品牌图标。
     app_icon = QIcon(str(LOGO_PATH))
     app.setWindowIcon(app_icon)
-    window = MainWindow()
+    tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+    window = MainWindow(config_store, system_tray_available=tray_available)
     window.setWindowIcon(app_icon)
 
-    if QSystemTrayIcon.isSystemTrayAvailable():
+    if tray_available:
         tray_icon = QSystemTrayIcon(app_icon, app)
         tray_icon.setToolTip("SecForge · 网安工具箱")
         tray_menu = QMenu()
