@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secforge"
+version = "0.1.0"
+description = "本地运行的网络安全工具启动器与工具管理器"
+requires-python = ">=3.13"
+dependencies = ["PyQt6>=6.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
