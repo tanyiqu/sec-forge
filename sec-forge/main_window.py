@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
+from ctypes import c_void_p, wintypes
+
 from PyQt6.QtCore import QPoint, QSize, Qt
-from PyQt6.QtGui import QIcon, QMouseEvent
+from PyQt6.QtGui import QCursor, QIcon, QMouseEvent
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from resources import CLOSE_ICON_PATH, MAXIMIZE_ICON_PATH, MINIMIZE_ICON_PATH
@@ -86,14 +89,60 @@ class TitleBar(QFrame):
 
 
 class MainWindow(QMainWindow):
+    """SecForge 主窗口，包含固定导航栏和可缩放的工作区。"""
+
+    _SIDEBAR_WIDTH = 220
+    _RESIZE_BORDER_WIDTH = 8
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("SecForge · 网安工具箱")
-        self.setMinimumSize(860, 560)
+        self.setMinimumSize(950, 600)
         self.resize(1180, 740)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._build_ui()
+
+    def nativeEvent(self, event_type: bytes, message: c_void_p) -> tuple[bool, int]:
+        """让 Windows 无边框窗口保留系统原生的边缘与角落缩放体验。"""
+
+        if sys.platform != "win32" or event_type != b"windows_generic_MSG":
+            return False, 0
+
+        WM_NCHITTEST = 0x0084
+        HTCLIENT = 1
+        HTLEFT, HTRIGHT, HTTOP, HTBOTTOM = 10, 11, 12, 15
+        HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 16, 17
+        # wintypes.MSG 与当前 Python/Windows 架构的指针宽度保持一致；
+        # 不手工声明结构，避免 64 位环境中消息内存布局不匹配。
+        native_message = wintypes.MSG.from_address(int(message))
+        if native_message.message != WM_NCHITTEST or self.isMaximized():
+            return False, 0
+
+        frame = self.frameGeometry()
+        cursor = QCursor.pos()
+        border = self._RESIZE_BORDER_WIDTH
+        on_left = cursor.x() <= frame.left() + border
+        on_right = cursor.x() >= frame.right() - border
+        on_top = cursor.y() <= frame.top() + border
+        on_bottom = cursor.y() >= frame.bottom() - border
+        if on_top and on_left:
+            return True, HTTOPLEFT
+        if on_top and on_right:
+            return True, HTTOPRIGHT
+        if on_bottom and on_left:
+            return True, HTBOTTOMLEFT
+        if on_bottom and on_right:
+            return True, HTBOTTOMRIGHT
+        if on_left:
+            return True, HTLEFT
+        if on_right:
+            return True, HTRIGHT
+        if on_top:
+            return True, HTTOP
+        if on_bottom:
+            return True, HTBOTTOM
+        return True, HTCLIENT
 
     def _build_ui(self) -> None:
         # 透明顶层窗口内放置圆角表面，使四角不露出系统标题栏背景。
@@ -105,16 +154,36 @@ class MainWindow(QMainWindow):
         surface_layout.addWidget(TitleBar(self))
         root = QWidget()
         layout = QHBoxLayout(root)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(18)
+        # 导航栏紧贴左、上、下边缘；右侧工作区随窗口剩余空间伸缩。
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # QListWidget 的视口不会跟随父控件的圆角裁剪。使用单独的圆角容器
+        # 承载透明列表，避免左下角覆盖 windowSurface 的圆角。
+        sidebar_panel = QFrame()
+        sidebar_panel.setObjectName("sidebarPanel")
+        sidebar_panel.setFixedWidth(self._SIDEBAR_WIDTH)
+        sidebar_layout = QVBoxLayout(sidebar_panel)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
         sidebar = QListWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(202)
+        sidebar.viewport().setAutoFillBackground(False)
         sidebar.addItems(["▦  全部工具 (0)", "★  我的收藏", "◷  最近使用", "────────────", "▣  信息收集 (0)", "▣  漏洞扫描 (0)", "▣  Web 工具 (0)", "▣  密码工具 (0)", "▣  其他工具 (0)"])
         sidebar.setCurrentRow(0)
-        layout.addWidget(sidebar)
+        sidebar_layout.addWidget(sidebar)
+        layout.addWidget(sidebar_panel)
+
+        divider = QFrame()
+        divider.setObjectName("sidebarDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        # 保持左右区域清晰分隔，同时避免分隔线额外占用工作区宽度。
+        divider.setFixedWidth(1)
+        layout.addWidget(divider)
 
         content = QVBoxLayout()
+        content.setContentsMargins(24, 20, 24, 22)
+        content.setSpacing(14)
         search = QLineEdit()
         search.setPlaceholderText("搜索名称 / 标签 / 描述")
         action_row = QHBoxLayout()
@@ -150,8 +219,11 @@ class MainWindow(QMainWindow):
             #windowSubtitle { color: #718096; font-size: 12px; }
             #windowButton, #closeButton { border: none; border-radius: 6px; background: transparent; color: #45536a; font-size: 18px; }
             #windowButton:hover { background: #eaf0f8; } #closeButton:hover { background: #e95353; color: white; }
-            #sidebar { background: #ffffff; border: 1px solid #e0e6ef; border-radius: 10px; padding: 8px; outline: 0; color: #364153; font-size: 13px; }
+            #sidebarPanel { background: #ffffff; border: none; border-bottom-left-radius: 13px; }
+            #sidebar, #sidebar::viewport { background: transparent; border: none; border-radius: 0; }
+            #sidebar { padding: 8px; outline: 0; color: #364153; font-size: 13px; }
             #sidebar::item { height: 34px; border-radius: 6px; padding-left: 8px; } #sidebar::item:selected { background: #e8f1ff; color: #1677e8; font-weight: 600; } #sidebar::item:hover { background: #f3f6fa; }
+            #sidebarDivider { background: #cbd5e1; border: none; }
             QLineEdit { min-height: 36px; background: #ffffff; border: 1px solid #d9e0ea; border-radius: 8px; padding: 0 12px; color: #243047; } QLineEdit:focus { border-color: #1677e8; }
             QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; } QPushButton:disabled { background: #9fc8f5; color: #f7fbff; }
             #contentArea { border: none; background: transparent; } #contentArea > QWidget > QWidget { background: transparent; }
