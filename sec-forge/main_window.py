@@ -7,11 +7,20 @@ from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
-from resources import CLOSE_ICON_PATH, LOGO_PATH, MAXIMIZE_ICON_PATH, MINIMIZE_ICON_PATH
+from resources import (
+    ALL_TOOLS_ICON_PATH,
+    CLOSE_ICON_PATH,
+    FAVORITES_ICON_PATH,
+    LOGO_PATH,
+    MAXIMIZE_ICON_PATH,
+    MINIMIZE_ICON_PATH,
+    RECENT_TOOLS_ICON_PATH,
+    TOOLS_MENU_ICON_PATH,
+)
 
 
 class TitleBar(QFrame):
@@ -309,8 +318,15 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName("sidebar")
         sidebar.viewport().setAutoFillBackground(False)
         # 分类菜单由 config/categories.json 决定，后续编辑分类时可直接复用此数据源。
-        category_items = [f"▣  {name} (0)" for name in self._config_store.load_category_names()]
-        sidebar.addItems(["▦  全部工具 (0)", "★  我的收藏", "◷  最近使用", "────────────", *category_items])
+        # 固定入口及分类使用应用素材图标，避免依赖不同系统的字符字形。
+        sidebar_items = [
+            (ALL_TOOLS_ICON_PATH, "全部工具 (0)"),
+            (FAVORITES_ICON_PATH, "我的收藏"),
+            (RECENT_TOOLS_ICON_PATH, "最近使用"),
+            *[(TOOLS_MENU_ICON_PATH, f"{name} (0)") for name in self._config_store.load_category_names()],
+        ]
+        for icon_path, text in sidebar_items:
+            sidebar.addItem(QListWidgetItem(QIcon(str(icon_path)), text))
         sidebar.setCurrentRow(0)
         sidebar_layout.addWidget(sidebar)
         layout.addWidget(sidebar_panel)

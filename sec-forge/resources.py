@@ -12,3 +12,9 @@ LOGO_PATH = IMAGE_ASSETS_DIR / "logo.png"
 CLOSE_ICON_PATH = IMAGE_ASSETS_DIR / "close_normal.png"
 MAXIMIZE_ICON_PATH = IMAGE_ASSETS_DIR / "max_normal.png"
 MINIMIZE_ICON_PATH = IMAGE_ASSETS_DIR / "min_normal.png"
+
+# 左侧菜单入口图标。分类菜单共用工具图标，保持菜单视觉一致。
+ALL_TOOLS_ICON_PATH = IMAGE_ASSETS_DIR / "all.png"
+FAVORITES_ICON_PATH = IMAGE_ASSETS_DIR / "star.png"
+RECENT_TOOLS_ICON_PATH = IMAGE_ASSETS_DIR / "recent.png"
+TOOLS_MENU_ICON_PATH = IMAGE_ASSETS_DIR / "tools.png"
