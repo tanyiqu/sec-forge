@@ -7,7 +7,7 @@ from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -294,6 +294,123 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+class AddToolDialog(QDialog):
+    """收集并校验本地工具启动信息的模态窗口。"""
+
+    _TOOL_TYPES = ("Python", "Java8", "Java11", "GUI应用", "命令行", "批处理", "Powershell", "网页")
+
+    def __init__(self, config_store: ConfigStore, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._config_store = config_store
+        self.setWindowTitle("添加工具")
+        self.setModal(True)
+        self.setFixedSize(510, 505)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
+        title = QLabel("添加工具")
+        title.setObjectName("dialogTitle")
+        layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(13)
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText("例如：DirSearch目录探测工具")
+        self._description_input = QLineEdit()
+        self._description_input.setPlaceholderText("简要说明工具用途")
+        self._type_selector = QComboBox()
+        self._type_selector.addItems(self._TOOL_TYPES)
+        self._path_input = QLineEdit()
+        self._path_input.setPlaceholderText("选择本地工具文件")
+        browse_button = QPushButton("浏览")
+        browse_button.setObjectName("secondaryButton")
+        browse_button.clicked.connect(self._browse_path)
+        path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.addWidget(self._path_input, 1)
+        path_row.addWidget(browse_button)
+        self._url_input = QLineEdit()
+        self._url_input.setPlaceholderText("网页工具的 URL（可选）")
+        self._category_selector = QComboBox()
+        self._category_selector.addItems(self._config_store.load_category_names())
+        self._params_input = QLineEdit()
+        self._params_input.setPlaceholderText("可选，例如：-h")
+        form.addRow("工具名称：", self._name_input)
+        form.addRow("工具描述：", self._description_input)
+        form.addRow("工具类型：", self._type_selector)
+        form.addRow("工具路径：", path_row)
+        form.addRow("网页：", self._url_input)
+        form.addRow("工具分类：", self._category_selector)
+        form.addRow("启动参数：", self._params_input)
+        layout.addLayout(form)
+        layout.addStretch()
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        save_button = QPushButton("保存")
+        save_button.clicked.connect(self._save_tool)
+        actions.addWidget(cancel_button)
+        actions.addWidget(save_button)
+        layout.addLayout(actions)
+        self.setStyleSheet("""
+            QDialog { background: #f5f7fb; color: #243047; }
+            #dialogTitle { color: #182033; font-size: 19px; font-weight: 700; }
+            QLabel { font-size: 14px; font-weight: 600; }
+            QLineEdit, QComboBox { min-height: 36px; background: #ffffff; border: 1px solid #d9e0ea; border-radius: 8px; padding: 0 10px; color: #243047; }
+            QLineEdit:focus, QComboBox:focus { border-color: #1677e8; }
+            QComboBox { padding-right: 32px; }
+            QComboBox:hover { border-color: #9cc5f5; background: #f9fbff; }
+            QComboBox::drop-down { width: 30px; border: none; border-left: 1px solid #e4eaf2; border-top-right-radius: 8px; border-bottom-right-radius: 8px; background: #f7f9fc; }
+            QComboBox::down-arrow { width: 7px; height: 7px; border-right: 2px solid #64748b; border-bottom: 2px solid #64748b; margin: 0 10px 4px 0; }
+            QComboBox QAbstractItemView { background: #ffffff; border: 1px solid #cdd8e7; border-radius: 8px; padding: 5px; outline: none; color: #243047; selection-background-color: #e8f1ff; selection-color: #1677e8; }
+            QComboBox QAbstractItemView::item { min-height: 32px; padding: 0 10px; border-radius: 5px; }
+            QComboBox QAbstractItemView::item:hover { background: #f3f7fd; color: #1677e8; }
+            QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; }
+            QPushButton:hover { background: #3689ec; }
+            #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; }
+            #secondaryButton:hover { color: #1677e8; border-color: #9cc5f5; background: #f4f8fe; }
+        """)
+
+    def _browse_path(self) -> None:
+        """用不限文件类型的选择器填充工具路径。"""
+
+        path, _ = QFileDialog.getOpenFileName(self, "选择工具文件", self._path_input.text(), "所有文件 (*)")
+        if path:
+            self._path_input.setText(path)
+
+    def _save_tool(self) -> None:
+        """校验输入后，以用户约定的字段写入 tools.json。"""
+
+        name = self._name_input.text().strip()
+        path = self._path_input.text().strip()
+        url = self._url_input.text().strip()
+        category = self._category_selector.currentText()
+        tool_type = self._type_selector.currentText()
+        is_web_tool = tool_type == "网页"
+        if not name or not category or (not url if is_web_tool else not path):
+            target_name = "网页 URL" if is_web_tool else "工具路径"
+            QMessageBox.warning(self, "信息不完整", f"请填写工具名称、{target_name}和工具分类。")
+            return
+        self._config_store.add_tool_configuration({
+            "name": name,
+            "category": category,
+            "type": tool_type,
+            "description": self._description_input.text().strip(),
+            "path": "" if is_web_tool else path,
+            "params": self._params_input.text().strip(),
+            "url": url if is_web_tool else "",
+        })
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     """SecForge 主窗口，包含固定导航栏和可缩放的工作区。"""
 
@@ -417,11 +534,20 @@ class MainWindow(QMainWindow):
         sidebar.viewport().setAutoFillBackground(False)
         # 分类菜单由 config/categories.json 决定，后续编辑分类时可直接复用此数据源。
         # 固定入口及分类使用应用素材图标，避免依赖不同系统的字符字形。
+        # tools.json 中的 category 保存分类展示名，因此可直接与左侧菜单名称匹配。
+        # 未知或已删除分类中的工具仍计入“全部工具”，不会被错误地归入其他分类。
+        tool_configurations = self._config_store.load_tool_configurations()
+        category_names = self._config_store.load_category_names()
+        category_counts = {name: 0 for name in category_names}
+        for configuration in tool_configurations:
+            category = configuration["category"]
+            if category in category_counts:
+                category_counts[category] += 1
         sidebar_items = [
-            (ALL_TOOLS_ICON_PATH, "全部工具 (0)"),
+            (ALL_TOOLS_ICON_PATH, f"全部工具 ({len(tool_configurations)})"),
             (FAVORITES_ICON_PATH, "我的收藏"),
             (RECENT_TOOLS_ICON_PATH, "最近使用"),
-            *[(TOOLS_MENU_ICON_PATH, f"{name} (0)") for name in self._config_store.load_category_names()],
+            *[(TOOLS_MENU_ICON_PATH, f"{name} ({category_counts[name]})") for name in category_names],
         ]
         for icon_path, text in sidebar_items:
             sidebar.addItem(QListWidgetItem(QIcon(str(icon_path)), text))
@@ -444,8 +570,8 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         action_row.addWidget(search, 1)
         add_button = QPushButton("+ 添加工具")
-        add_button.setEnabled(False)
-        add_button.setToolTip("工具管理功能即将提供")
+        add_button.setToolTip("添加本地工具或网页工具")
+        add_button.clicked.connect(self.show_add_tool_dialog)
         action_row.addWidget(add_button)
         settings_button = QPushButton("设置")
         settings_button.setObjectName("secondaryButton")
@@ -455,7 +581,7 @@ class MainWindow(QMainWindow):
         empty = QFrame()
         empty_layout = QVBoxLayout(empty)
         empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title = QLabel("还没有添加工具")
+        title = QLabel("还没有添加工具" if not tool_configurations else f"已添加 {len(tool_configurations)} 个工具")
         title.setObjectName("emptyTitle")
         hint = QLabel("通过“添加工具”建立你的本地工具库。\nSecForge 仅用于合法、已授权的安全测试与研究。")
         hint.setObjectName("emptyHint")
@@ -500,6 +626,13 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         SettingsDialog(self._config_store, self).exec()
+
+    def show_add_tool_dialog(self) -> None:
+        """显示添加工具窗口；保存成功后更新工具数量提示。"""
+
+        if AddToolDialog(self._config_store, self).exec() == QDialog.DialogCode.Accepted:
+            # 当前页面尚未实现工具卡片，重建中央界面即可同步更新导航计数和空状态提示。
+            self._build_ui()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """按已保存的常规设置决定关闭主窗口时的行为。"""

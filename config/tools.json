@@ -1,4 +1,11 @@
-{
-  "schema_version": 1,
-  "tools": []
-}
+[
+  {
+    "name": "DirSearch目录探测工具",
+    "category": "信息收集",
+    "type": "Python",
+    "description": "DirSearch目录探测工具",
+    "path": "F:\\Desktop\\天狐渗透工具箱\\天狐渗透工具箱-社区版V3.0\\tools\\gui_scan\\dirsearch\\dirsearch.py",
+    "params": "-h",
+    "url": ""
+  }
+]

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
-from tool import Tool
+from tool import LaunchType, Tool, ToolProfile
 
 
 class ConfigStore:
@@ -39,7 +40,8 @@ class ConfigStore:
             {"id": "other", "name": "其他工具", "order": 4},
         ],
     }
-    _DEFAULT_TOOLS = {"schema_version": SCHEMA_VERSION, "tools": []}
+    # tools.json 是用户直接维护的工具清单，使用扁平数组格式，方便导入、导出和查看。
+    _DEFAULT_TOOLS: list[dict[str, str]] = []
 
     def __init__(self, path: Path | None = None) -> None:
         # 保留可传入路径的能力，以兼容已有的工具列表存储调用方式。
@@ -156,19 +158,105 @@ class ConfigStore:
             category_items.append((order, name))
         return [name for _, name in sorted(category_items)]
 
-    def load_tools(self) -> list[Tool]:
+    def load_tool_configurations(self) -> list[dict[str, str]]:
+        """读取 ``tools.json`` 中面向用户的工具配置记录。
+
+        新格式为记录数组；同时兼容项目骨架阶段可能生成的
+        ``{\"schema_version\": 1, \"tools\": [...]}`` 格式，避免已有配置失效。
+        """
+
         self.ensure_config_files()
         if not self.path.exists():
             return []
-        raw = self._read_json(self.path)
-        self._validate_schema(raw)
-        return [Tool.from_dict(item) for item in raw.get("tools", [])]
+
+        text = self.path.read_text(encoding="utf-8").strip()
+        if not text:
+            return []
+        raw: Any = json.loads(text)
+        if isinstance(raw, dict):
+            self._validate_schema(raw)
+            raw = raw.get("tools", [])
+        if not isinstance(raw, list):
+            raise ValueError("工具配置格式无效")
+
+        records: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("工具配置格式无效")
+            profile = item.get("profile", {})
+            profile = profile if isinstance(profile, dict) else {}
+            records.append({
+                "name": str(item.get("name", "")),
+                "category": str(item.get("category", item.get("category_id", ""))),
+                "type": str(item.get("type", item.get("launch_type", "GUI应用"))),
+                "description": str(item.get("description", "")),
+                "path": str(item.get("path", profile.get("target", ""))),
+                "params": str(item.get("params", profile.get("arguments", ""))),
+                "url": str(item.get("url", "")),
+            })
+        return records
+
+    def add_tool_configuration(self, configuration: dict[str, str]) -> None:
+        """将一条已校验的工具配置追加写入 ``tools.json``。"""
+
+        records = self.load_tool_configurations()
+        records.append(configuration)
+        self.save_tool_configurations(records)
+
+    def save_tool_configurations(self, configurations: list[dict[str, str]]) -> None:
+        """使用稳定的字段顺序保存用户可读的工具配置数组。"""
+
+        fields = ("name", "category", "type", "description", "path", "params", "url")
+        normalized = [{field: str(item.get(field, "")) for field in fields} for item in configurations]
+        self._write_json_value(self.path, normalized)
+
+    def load_tools(self) -> list[Tool]:
+        """将用户配置转换为既有领域模型，保持旧调用方兼容。"""
+
+        launch_types = {
+            "Python": LaunchType.PYTHON,
+            "Java8": LaunchType.JAVA_8,
+            "Java11": LaunchType.JAVA_11,
+            "GUI应用": LaunchType.GUI,
+            "命令行": LaunchType.CLI,
+            "批处理": LaunchType.BATCH,
+            "Powershell": LaunchType.POWERSHELL,
+            "网页": LaunchType.WEB,
+        }
+        return [
+            Tool(
+                name=item["name"],
+                category_id=item["category"],
+                launch_type=launch_types.get(item["type"], LaunchType.GUI),
+                profile=ToolProfile(target=item["url"] or item["path"], arguments=item["params"]),
+                description=item["description"],
+            )
+            for item in self.load_tool_configurations()
+        ]
 
     def save_tools(self, tools: list[Tool]) -> None:
-        self._write_json(
-            self.path,
-            {"schema_version": self.SCHEMA_VERSION, "tools": [tool.to_dict() for tool in tools]},
-        )
+        type_names = {
+            LaunchType.PYTHON: "Python",
+            LaunchType.JAVA_8: "Java8",
+            LaunchType.JAVA_11: "Java11",
+            LaunchType.GUI: "GUI应用",
+            LaunchType.CLI: "命令行",
+            LaunchType.BATCH: "批处理",
+            LaunchType.POWERSHELL: "Powershell",
+            LaunchType.WEB: "网页",
+        }
+        self.save_tool_configurations([
+            {
+                "name": tool.name,
+                "category": tool.category_id,
+                "type": type_names[tool.launch_type],
+                "description": tool.description,
+                "path": "" if tool.launch_type is LaunchType.WEB else tool.profile.target,
+                "params": tool.profile.arguments,
+                "url": tool.profile.target if tool.launch_type is LaunchType.WEB else "",
+            }
+            for tool in tools
+        ])
 
     def _validate_schema(self, raw: dict[str, object]) -> None:
         if raw.get("schema_version") != self.SCHEMA_VERSION:
@@ -196,5 +284,9 @@ class ConfigStore:
 
     @staticmethod
     def _write_json(path: Path, content: dict[str, object]) -> None:
+        ConfigStore._write_json_value(path, content)
+
+    @staticmethod
+    def _write_json_value(path: Path, content: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
