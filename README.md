@@ -21,7 +21,7 @@ SecForge 仅可用于合法、已授权的安全测试、企业内部安全运�
 - 提供工具、工具启动配置和分类的数据模型；
 - 支持 Python、Java 8 / 11、GUI、CLI、批处理、PowerShell 和网页等启动类型的配置表示；
 - 提供仅进行配置和路径存在性检查的工具健康检查逻辑；
-- 程序启动时会在根目录创建 `config/`；其中 `settings.json` 保存系统设置（首次启动时会以 `sec-forge.py` 所在目录为基准生成 `env/python3/python.exe`、`env/Java_path/Java_8_win/bin`、`env/Java_path/Java_11_win/bin` 三个环境路径默认值），`categories.json` 保存并驱动左侧分类菜单，`tools.json` 以 `name`、`category`、`type`、`description`、`path`、`params`、`url` 字段组成的 JSON 数组保存工具配置，且不会覆盖已有配置；
+- 程序启动时会在根目录创建 `config/`；其中 `settings.json` 保存系统设置（首次启动时会以 `sec-forge.py` 所在目录为基准生成 `env/python3/python.exe`、`env/Java_path/Java_8_win/bin`、`env/Java_path/Java_11_win/bin` 三个环境路径默认值），`categories.json` 以 `{"categories": ["分类名称", ...]}` 的字符串数组保存并驱动左侧分类菜单，数组从上到下的顺序即菜单展示顺序；旧版分类对象数组会在启动时自动迁移，`tools.json` 以 `name`、`category`、`type`、`description`、`path`、`params`、`url` 字段组成的 JSON 数组保存工具配置，且不会覆盖已有配置；
 - 预留跨平台启动器和 Windows 启动器接口。
 
 ## 尚未实现

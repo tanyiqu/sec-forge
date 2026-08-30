@@ -30,14 +30,15 @@ class ConfigStore:
         "general": {"minimize_to_tray_on_close": True},
         **_DEFAULT_ENVIRONMENT_PATHS,
     }
+    # 分类使用字符串数组保存，数组顺序即左侧菜单的展示顺序。
     _DEFAULT_CATEGORIES = {
-        "schema_version": SCHEMA_VERSION,
         "categories": [
-            {"id": "information_collection", "name": "信息收集", "order": 0},
-            {"id": "vulnerability_scanning", "name": "漏洞扫描", "order": 1},
-            {"id": "web_tools", "name": "Web 工具", "order": 2},
-            {"id": "password_tools", "name": "密码工具", "order": 3},
-            {"id": "other", "name": "其他工具", "order": 4},
+            "信息收集工具",
+            "框架漏洞利用工具",
+            "漏洞扫描与利用工具",
+            "抓包与代理工具",
+            "后渗透工具",
+            "爆破工具",
         ],
     }
     # tools.json 是用户直接维护的工具清单，使用扁平数组格式，方便导入、导出和查看。
@@ -59,6 +60,7 @@ class ConfigStore:
         for path, content in default_files.items():
             if not path.exists():
                 self._write_json(path, content)
+        self._migrate_legacy_categories()
         self._ensure_environment_defaults()
 
     def load_settings(self) -> dict[str, object]:
@@ -138,25 +140,15 @@ class ConfigStore:
         self._write_json(self.SETTINGS_PATH, settings)
 
     def load_category_names(self) -> list[str]:
-        """按配置顺序读取左侧菜单中展示的分类名称。"""
+        """按配置数组顺序读取左侧菜单中展示的分类名称。
+
+        当前 ``categories.json`` 使用 ``{"categories": ["分类名称", ...]}``
+        格式。为避免旧版本地配置失效，也支持读取原有的分类对象数组。
+        """
 
         self.ensure_config_files()
         raw = self._read_json(self.CATEGORIES_PATH)
-        self._validate_schema(raw)
-        categories = raw.get("categories", [])
-        if not isinstance(categories, list):
-            raise ValueError("分类配置格式无效")
-
-        category_items: list[tuple[int, str]] = []
-        for category in categories:
-            if not isinstance(category, dict):
-                raise ValueError("分类配置格式无效")
-            name = category.get("name")
-            order = category.get("order", 0)
-            if not isinstance(name, str) or not isinstance(order, int):
-                raise ValueError("分类配置格式无效")
-            category_items.append((order, name))
-        return [name for _, name in sorted(category_items)]
+        return self._category_names_from_raw(raw)
 
     def load_tool_configurations(self) -> list[dict[str, str]]:
         """读取 ``tools.json`` 中面向用户的工具配置记录。
@@ -274,6 +266,43 @@ class ConfigStore:
                 changed = True
         if changed:
             self._write_json(self.SETTINGS_PATH, settings)
+
+    def _migrate_legacy_categories(self) -> None:
+        """将旧版分类对象数组迁移为按名称排列的字符串数组。"""
+
+        raw = self._read_json(self.CATEGORIES_PATH)
+        categories = raw.get("categories")
+        if not isinstance(categories, list) or not categories:
+            return
+        if all(isinstance(category, str) for category in categories):
+            return
+
+        self._write_json(
+            self.CATEGORIES_PATH,
+            {"categories": self._category_names_from_raw(raw)},
+        )
+
+    @staticmethod
+    def _category_names_from_raw(raw: dict[str, object]) -> list[str]:
+        """解析新旧两种分类格式，并保留对应的展示顺序。"""
+
+        categories = raw.get("categories", [])
+        if not isinstance(categories, list):
+            raise ValueError("分类配置格式无效")
+        if all(isinstance(category, str) for category in categories):
+            return categories.copy()
+
+        # 兼容旧版 ``name`` / ``order`` 对象数组；相同 order 时维持文件顺序。
+        category_items: list[tuple[int, str]] = []
+        for category in categories:
+            if not isinstance(category, dict):
+                raise ValueError("分类配置格式无效")
+            name = category.get("name")
+            order = category.get("order", 0)
+            if not isinstance(name, str) or not isinstance(order, int):
+                raise ValueError("分类配置格式无效")
+            category_items.append((order, name))
+        return [name for _, name in sorted(category_items)]
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, object]:
