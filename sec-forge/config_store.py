@@ -114,6 +114,27 @@ class ConfigStore:
         )
         self._write_json(self.SETTINGS_PATH, settings)
 
+    def window_geometry(self) -> tuple[int, int, int, int] | None:
+        """返回已保存的窗口宽、高及左上角坐标，无效或缺失时返回 ``None``。"""
+
+        settings = self.load_settings()
+        keys = ("width", "height", "x", "y")
+        values = tuple(settings.get(key) for key in keys)
+        # bool 是 int 的子类，但不应作为窗口坐标或尺寸使用。
+        if not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            return None
+        width, height, x, y = values
+        if width <= 0 or height <= 0:
+            return None
+        return width, height, x, y
+
+    def set_window_geometry(self, *, width: int, height: int, x: int, y: int) -> None:
+        """保存主窗口的普通状态尺寸与左上角坐标。"""
+
+        settings = self.load_settings()
+        settings.update({"width": width, "height": height, "x": x, "y": y})
+        self._write_json(self.SETTINGS_PATH, settings)
+
     def load_category_names(self) -> list[str]:
         """按配置顺序读取左侧菜单中展示的分类名称。"""
 

@@ -30,6 +30,9 @@ def main() -> int:
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
     window = MainWindow(config_store, system_tray_available=tray_available)
     window.setWindowIcon(app_icon)
+    # 托盘菜单调用 app.quit() 时不会经过主窗口的 closeEvent，因此在应用退出前
+    # 统一保存一次窗口状态；重复保存是幂等的。
+    app.aboutToQuit.connect(window.save_window_geometry)
 
     if tray_available:
         tray_icon = QSystemTrayIcon(app_icon, app)

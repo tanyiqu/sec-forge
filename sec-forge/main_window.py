@@ -5,9 +5,9 @@ from pathlib import Path
 import sys
 from ctypes import c_void_p, wintypes
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -311,6 +311,43 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._build_ui()
+        self._restore_window_geometry()
+
+    def _restore_window_geometry(self) -> None:
+        """恢复任一已连接显示器内的窗口状态，无法恢复时置于主屏幕中央。"""
+
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        available_area = screen.availableGeometry()
+        saved_geometry = self._config_store.window_geometry()
+        if saved_geometry is not None:
+            width, height, x, y = saved_geometry
+            self.resize(width, height)
+            requested_area = QRect(x, y, self.width(), self.height())
+            # 坐标是虚拟桌面坐标：副显示器在主显示器左侧或上方时会出现负值。
+            # 只要窗口完整落在任一当前已连接显示器的可用区域，就应原位恢复。
+            if any(screen.availableGeometry().contains(requested_area) for screen in QApplication.screens()):
+                self.move(x, y)
+                return
+
+        # 保存的坐标缺失、无效，或原显示器已断开导致窗口位于所有屏幕外时，
+        # 保留当前尺寸并回退至主显示器中央。
+        self.move(
+            available_area.x() + (available_area.width() - self.width()) // 2,
+            available_area.y() + (available_area.height() - self.height()) // 2,
+        )
+        self.save_window_geometry()
+
+    def save_window_geometry(self) -> None:
+        """将当前普通窗口的尺寸和位置写入本地设置文件。"""
+
+        if self.isMaximized() or self.isMinimized():
+            return
+        geometry = self.geometry()
+        self._config_store.set_window_geometry(
+            width=geometry.width(), height=geometry.height(), x=geometry.x(), y=geometry.y()
+        )
 
     def nativeEvent(self, event_type: bytes, message: c_void_p) -> tuple[bool, int]:
         """让 Windows 无边框窗口保留系统原生的边缘与角落缩放体验。"""
@@ -471,4 +508,5 @@ class MainWindow(QMainWindow):
             self.hide()
             event.ignore()
             return
+        self.save_window_geometry()
         event.accept()
