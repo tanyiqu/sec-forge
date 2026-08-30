@@ -7,7 +7,7 @@ from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -304,7 +304,7 @@ class AddToolDialog(QDialog):
         self._config_store = config_store
         self.setWindowTitle("添加工具")
         self.setModal(True)
-        self.setFixedSize(510, 505)
+        self.setFixedWidth(510)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -340,6 +340,9 @@ class AddToolDialog(QDialog):
         self._category_selector.addItems(self._config_store.load_category_names())
         self._params_input = QLineEdit()
         self._params_input.setPlaceholderText("可选，例如：-h")
+        self._weight_selector = QComboBox()
+        self._weight_selector.addItems([str(weight) for weight in range(11)])
+        self._weight_selector.setCurrentText("0")
         form.addRow("工具名称：", self._name_input)
         form.addRow("工具描述：", self._description_input)
         form.addRow("工具类型：", self._type_selector)
@@ -347,6 +350,7 @@ class AddToolDialog(QDialog):
         form.addRow("网页：", self._url_input)
         form.addRow("工具分类：", self._category_selector)
         form.addRow("启动参数：", self._params_input)
+        form.addRow("权重：", self._weight_selector)
         layout.addLayout(form)
         layout.addStretch()
 
@@ -378,6 +382,10 @@ class AddToolDialog(QDialog):
             #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; }
             #secondaryButton:hover { color: #1677e8; border-color: #9cc5f5; background: #f4f8fe; }
         """)
+        # 样式中的控件最小高度会影响布局，需在应用 QSS 后计算最终高度。
+        # 新增字段时会随布局自动增高，不会在对话框右侧产生滚动条。
+        self.adjustSize()
+        self.setFixedHeight(self.sizeHint().height())
 
     def _browse_path(self) -> None:
         """用不限文件类型的选择器填充工具路径。"""
@@ -407,8 +415,49 @@ class AddToolDialog(QDialog):
             "path": "" if is_web_tool else path,
             "params": self._params_input.text().strip(),
             "url": url if is_web_tool else "",
+            "weight": int(self._weight_selector.currentText()),
         })
         self.accept()
+
+
+class ToolCard(QFrame):
+    """以固定尺寸显示工具信息的卡片；样式由对象名对应的 QSS 统一控制。"""
+
+    WIDTH = 200
+    HEIGHT = 140
+
+    def __init__(self, configuration: dict[str, object], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("toolCard")
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
+
+        title = QLabel(str(configuration["name"]))
+        title.setObjectName("toolCardTitle")
+        title.setToolTip(str(configuration["name"]))
+        title.setWordWrap(False)
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(title)
+
+        description = QLabel(str(configuration["description"]))
+        description.setObjectName("toolCardDescription")
+        description.setWordWrap(True)
+        description.setTextFormat(Qt.TextFormat.PlainText)
+        description.setToolTip(str(configuration["description"]))
+        layout.addWidget(description, 1)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+        tool_type = QLabel(str(configuration["type"]))
+        tool_type.setObjectName("toolCardType")
+        category = QLabel(str(configuration["category"]))
+        category.setObjectName("toolCardCategory")
+        category.setToolTip(str(configuration["category"]))
+        footer.addWidget(tool_type)
+        footer.addWidget(category, 1)
+        layout.addLayout(footer)
 
 
 class MainWindow(QMainWindow):
@@ -544,14 +593,17 @@ class MainWindow(QMainWindow):
             if category in category_counts:
                 category_counts[category] += 1
         sidebar_items = [
-            (ALL_TOOLS_ICON_PATH, f"全部工具 ({len(tool_configurations)})"),
-            (FAVORITES_ICON_PATH, "我的收藏"),
-            (RECENT_TOOLS_ICON_PATH, "最近使用"),
-            *[(TOOLS_MENU_ICON_PATH, f"{name} ({category_counts[name]})") for name in category_names],
+            (ALL_TOOLS_ICON_PATH, f"全部工具 ({len(tool_configurations)})", "all"),
+            (FAVORITES_ICON_PATH, "我的收藏", "favorites"),
+            (RECENT_TOOLS_ICON_PATH, "最近使用", "recent"),
+            *[(TOOLS_MENU_ICON_PATH, f"{name} ({category_counts[name]})", f"category:{name}") for name in category_names],
         ]
-        for icon_path, text in sidebar_items:
-            sidebar.addItem(QListWidgetItem(QIcon(str(icon_path)), text))
+        for icon_path, text, menu_key in sidebar_items:
+            item = QListWidgetItem(QIcon(str(icon_path)), text)
+            item.setData(Qt.ItemDataRole.UserRole, menu_key)
+            sidebar.addItem(item)
         sidebar.setCurrentRow(0)
+        sidebar.currentItemChanged.connect(self._show_tools_for_menu)
         sidebar_layout.addWidget(sidebar)
         layout.addWidget(sidebar_panel)
 
@@ -578,22 +630,10 @@ class MainWindow(QMainWindow):
         settings_button.clicked.connect(self.show_settings)
         action_row.addWidget(settings_button)
         content.addLayout(action_row)
-        empty = QFrame()
-        empty_layout = QVBoxLayout(empty)
-        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title = QLabel("还没有添加工具" if not tool_configurations else f"已添加 {len(tool_configurations)} 个工具")
-        title.setObjectName("emptyTitle")
-        hint = QLabel("通过“添加工具”建立你的本地工具库。\nSecForge 仅用于合法、已授权的安全测试与研究。")
-        hint.setObjectName("emptyHint")
-        hint.setWordWrap(True)
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
-        empty_layout.addWidget(hint, alignment=Qt.AlignmentFlag.AlignCenter)
-        scroll = QScrollArea()
-        scroll.setObjectName("contentArea")
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(empty)
-        content.addWidget(scroll)
+        self._tool_scroll = QScrollArea()
+        self._tool_scroll.setObjectName("contentArea")
+        self._tool_scroll.setWidgetResizable(True)
+        content.addWidget(self._tool_scroll)
         layout.addLayout(content, 1)
         surface_layout.addWidget(root, 1)
         self.setCentralWidget(surface)
@@ -615,8 +655,70 @@ class MainWindow(QMainWindow):
             QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; } QPushButton:hover { background: #3689ec; } QPushButton:disabled { background: #9fc8f5; color: #f7fbff; }
             #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; } #secondaryButton:hover { color: #1677e8; border-color: #9cc5f5; background: #f4f8fe; }
             #contentArea { border: none; background: transparent; } #contentArea > QWidget > QWidget { background: transparent; }
+            #toolGrid { background: transparent; }
+            #toolCard { background: #ffffff; border: 1px solid #dce2ec; border-radius: 12px; }
+            #toolCard:hover { border-color: #9cc5f5; background: #fafdff; }
+            #toolCardTitle { color: #182033; font-size: 15px; font-weight: 700; }
+            #toolCardDescription { color: #64748b; font-size: 12px; }
+            #toolCardType { color: #1677e8; font-size: 11px; font-weight: 600; background: #e8f1ff; border-radius: 4px; padding: 2px 6px; }
+            #toolCardCategory { color: #64748b; font-size: 11px; }
             #emptyState { background: #ffffff; border: 1px dashed #d5deea; border-radius: 12px; } #emptyTitle { color: #243047; font-size: 20px; font-weight: 700; } #emptyHint { color: #7c8798; font-size: 13px; }
         """)
+        self._show_tools_for_menu(sidebar.currentItem())
+
+    def _show_tools_for_menu(self, item: QListWidgetItem | None) -> None:
+        """根据左侧菜单更新右侧工具卡片，分类内按权重和名称稳定排序。"""
+
+        if item is None:
+            return
+        menu_key = str(item.data(Qt.ItemDataRole.UserRole))
+        configurations = self._config_store.load_tool_configurations()
+        if menu_key == "all":
+            title = f"全部工具 ({len(configurations)})"
+            selected_tools = configurations
+        elif menu_key.startswith("category:"):
+            category = menu_key.removeprefix("category:")
+            selected_tools = [tool for tool in configurations if tool["category"] == category]
+            title = f"{category} ({len(selected_tools)})"
+        else:
+            # 收藏和最近使用的交互尚未实现，保留页面入口但不混入分类结果。
+            title = "我的收藏" if menu_key == "favorites" else "最近使用"
+            selected_tools = []
+
+        selected_tools.sort(key=lambda tool: (-int(tool["weight"]), str(tool["name"])))
+        self._tool_scroll.setWidget(self._create_tools_widget(selected_tools, title))
+
+    @staticmethod
+    def _create_tools_widget(tools: list[dict[str, object]], title: str) -> QWidget:
+        """构建卡片网格；卡片本身固定为 200 × 140，便于通过 QSS 定制。"""
+
+        if not tools:
+            empty = QFrame()
+            empty.setObjectName("emptyState")
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_title = QLabel("还没有添加工具" if title.startswith("全部工具") else "暂无工具")
+            empty_title.setObjectName("emptyTitle")
+            hint = QLabel("通过“添加工具”建立你的本地工具库。\nSecForge 仅用于合法、已授权的安全测试与研究。")
+            hint.setObjectName("emptyHint")
+            hint.setWordWrap(True)
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(empty_title, alignment=Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(hint, alignment=Qt.AlignmentFlag.AlignCenter)
+            return empty
+
+        grid_widget = QWidget()
+        grid_widget.setObjectName("toolGrid")
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+        grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        # 最小工作区可容纳三张 200px 卡片；固定列数也使卡片间距稳定、易于定制。
+        columns = 3
+        for index, configuration in enumerate(tools):
+            grid.addWidget(ToolCard(configuration), index // columns, index % columns)
+        return grid_widget
 
     def show_settings(self) -> None:
         """显示独立的模态系统设置窗口。"""
@@ -631,7 +733,7 @@ class MainWindow(QMainWindow):
         """显示添加工具窗口；保存成功后更新工具数量提示。"""
 
         if AddToolDialog(self._config_store, self).exec() == QDialog.DialogCode.Accepted:
-            # 当前页面尚未实现工具卡片，重建中央界面即可同步更新导航计数和空状态提示。
+            # 保存后重建页面，导航计数与工具卡片立即同步最新配置。
             self._build_ui()
 
     def closeEvent(self, event: QCloseEvent) -> None:

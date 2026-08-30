@@ -42,7 +42,7 @@ class ConfigStore:
         ],
     }
     # tools.json 是用户直接维护的工具清单，使用扁平数组格式，方便导入、导出和查看。
-    _DEFAULT_TOOLS: list[dict[str, str]] = []
+    _DEFAULT_TOOLS: list[dict[str, object]] = []
 
     def __init__(self, path: Path | None = None) -> None:
         # 保留可传入路径的能力，以兼容已有的工具列表存储调用方式。
@@ -150,7 +150,7 @@ class ConfigStore:
         raw = self._read_json(self.CATEGORIES_PATH)
         return self._category_names_from_raw(raw)
 
-    def load_tool_configurations(self) -> list[dict[str, str]]:
+    def load_tool_configurations(self) -> list[dict[str, object]]:
         """读取 ``tools.json`` 中面向用户的工具配置记录。
 
         新格式为记录数组；同时兼容项目骨架阶段可能生成的
@@ -171,7 +171,7 @@ class ConfigStore:
         if not isinstance(raw, list):
             raise ValueError("工具配置格式无效")
 
-        records: list[dict[str, str]] = []
+        records: list[dict[str, object]] = []
         for item in raw:
             if not isinstance(item, dict):
                 raise ValueError("工具配置格式无效")
@@ -185,21 +185,30 @@ class ConfigStore:
                 "path": str(item.get("path", profile.get("target", ""))),
                 "params": str(item.get("params", profile.get("arguments", ""))),
                 "url": str(item.get("url", "")),
+                # 旧配置没有 weight 时保持默认优先级；非法值也安全回退为 0。
+                "weight": self._normalize_weight(item.get("weight", 0)),
             })
         return records
 
-    def add_tool_configuration(self, configuration: dict[str, str]) -> None:
+    def add_tool_configuration(self, configuration: dict[str, object]) -> None:
         """将一条已校验的工具配置追加写入 ``tools.json``。"""
 
         records = self.load_tool_configurations()
         records.append(configuration)
         self.save_tool_configurations(records)
 
-    def save_tool_configurations(self, configurations: list[dict[str, str]]) -> None:
+    def save_tool_configurations(self, configurations: list[dict[str, object]]) -> None:
         """使用稳定的字段顺序保存用户可读的工具配置数组。"""
 
         fields = ("name", "category", "type", "description", "path", "params", "url")
-        normalized = [{field: str(item.get(field, "")) for field in fields} for item in configurations]
+        normalized = [
+            {
+                **{field: str(item.get(field, "")) for field in fields},
+                # JSON 中保持数值类型，方便用户直接编辑和按权重理解排序。
+                "weight": self._normalize_weight(item.get("weight", 0)),
+            }
+            for item in configurations
+        ]
         self._write_json_value(self.path, normalized)
 
     def load_tools(self) -> list[Tool]:
@@ -222,6 +231,7 @@ class ConfigStore:
                 launch_type=launch_types.get(item["type"], LaunchType.GUI),
                 profile=ToolProfile(target=item["url"] or item["path"], arguments=item["params"]),
                 description=item["description"],
+                weight=self._normalize_weight(item["weight"]),
             )
             for item in self.load_tool_configurations()
         ]
@@ -246,9 +256,23 @@ class ConfigStore:
                 "path": "" if tool.launch_type is LaunchType.WEB else tool.profile.target,
                 "params": tool.profile.arguments,
                 "url": tool.profile.target if tool.launch_type is LaunchType.WEB else "",
+                "weight": self._normalize_weight(tool.weight),
             }
             for tool in tools
         ])
+
+    @staticmethod
+    def _normalize_weight(value: object) -> int:
+        """返回 ``tools.json`` 支持的整数权重；无效值回退为默认值 0。"""
+
+        # bool 是 int 的子类，不能作为用户可见的权重配置。
+        if isinstance(value, bool):
+            return 0
+        try:
+            weight = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return weight if 0 <= weight <= 10 else 0
 
     def _validate_schema(self, raw: dict[str, object]) -> None:
         if raw.get("schema_version") != self.SCHEMA_VERSION:

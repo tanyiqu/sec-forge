@@ -49,6 +49,7 @@ class Tool:
     tags: list[str] = field(default_factory=list)
     icon_path: str = ""
     favorite: bool = False
+    weight: int = 0
     health: ToolHealth = ToolHealth.UNCHECKED
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,5 +70,18 @@ class Tool:
             tags=[str(tag) for tag in data.get("tags", [])],
             icon_path=str(data.get("icon_path", "")),
             favorite=bool(data.get("favorite", False)),
+            weight=cls._normalized_weight(data.get("weight", 0)),
             health=ToolHealth(data.get("health", ToolHealth.UNCHECKED)),
         )
+
+    @staticmethod
+    def _normalized_weight(value: Any) -> int:
+        """将配置中的权重限制在工具配置支持的 0 至 10 范围内。"""
+
+        if isinstance(value, bool):
+            return 0
+        try:
+            weight = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return weight if 0 <= weight <= 10 else 0
