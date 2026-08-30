@@ -172,11 +172,18 @@ class ConfigStore:
             raise ValueError("工具配置格式无效")
 
         records: list[dict[str, object]] = []
+        needs_star_migration = False
         for item in raw:
             if not isinstance(item, dict):
                 raise ValueError("工具配置格式无效")
             profile = item.get("profile", {})
             profile = profile if isinstance(profile, dict) else {}
+            star = item.get("star", False)
+            if not isinstance(star, bool):
+                star = False
+                needs_star_migration = True
+            if "star" not in item:
+                needs_star_migration = True
             records.append({
                 "name": str(item.get("name", "")),
                 "category": str(item.get("category", item.get("category_id", ""))),
@@ -187,7 +194,11 @@ class ConfigStore:
                 "url": str(item.get("url", "")),
                 # 旧配置没有 weight 时保持默认优先级；非法值也安全回退为 0。
                 "weight": self._normalize_weight(item.get("weight", 0)),
+                # 收藏状态以 bool 保存；旧记录在首次读取时自动补齐为 false。
+                "star": star,
             })
+        if needs_star_migration:
+            self.save_tool_configurations(records)
         return records
 
     def add_tool_configuration(self, configuration: dict[str, object]) -> None:
@@ -206,10 +217,26 @@ class ConfigStore:
                 **{field: str(item.get(field, "")) for field in fields},
                 # JSON 中保持数值类型，方便用户直接编辑和按权重理解排序。
                 "weight": self._normalize_weight(item.get("weight", 0)),
+                "star": item.get("star", False) if isinstance(item.get("star", False), bool) else False,
             }
             for item in configurations
         ]
         self._write_json_value(self.path, normalized)
+
+    def set_tool_configuration_star(self, configuration: dict[str, object], starred: bool) -> None:
+        """更新一条工具配置的收藏状态并立即保存到 ``tools.json``。
+
+        工具清单当前没有独立 ID，故以完整规范化配置定位记录；完全重复的
+        配置在界面上没有可区分信息，更新其中第一条即可保持行为确定。
+        """
+
+        records = self.load_tool_configurations()
+        for record in records:
+            if record == configuration:
+                record["star"] = starred
+                self.save_tool_configurations(records)
+                return
+        raise ValueError("未找到要更新收藏状态的工具配置")
 
     def load_tools(self) -> list[Tool]:
         """将用户配置转换为既有领域模型，保持旧调用方兼容。"""
@@ -257,6 +284,7 @@ class ConfigStore:
                 "params": tool.profile.arguments,
                 "url": tool.profile.target if tool.launch_type is LaunchType.WEB else "",
                 "weight": self._normalize_weight(tool.weight),
+                "star": tool.favorite,
             }
             for tool in tools
         ])

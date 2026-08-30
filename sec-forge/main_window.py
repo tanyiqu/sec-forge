@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import sys
 from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QToolButton, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -19,6 +20,10 @@ from resources import (
     MAXIMIZE_ICON_PATH,
     MINIMIZE_ICON_PATH,
     RECENT_TOOLS_ICON_PATH,
+    TOOL_STARRED_ICON_PATH,
+    TOOL_STATUS_ERROR_ICON_PATH,
+    TOOL_STATUS_OK_ICON_PATH,
+    TOOL_UNSTARRED_ICON_PATH,
     TOOLS_MENU_ICON_PATH,
 )
 
@@ -426,7 +431,12 @@ class ToolCard(QFrame):
     WIDTH = 200
     HEIGHT = 140
 
-    def __init__(self, configuration: dict[str, object], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        configuration: dict[str, object],
+        on_star_changed: Callable[[dict[str, object], bool], None],
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("toolCard")
         self.setFixedSize(self.WIDTH, self.HEIGHT)
@@ -434,12 +444,33 @@ class ToolCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        path_exists = bool(str(configuration["path"])) and Path(str(configuration["path"])).exists()
+        status = QLabel()
+        status.setObjectName("toolCardStatus")
+        status.setPixmap(QPixmap(str(TOOL_STATUS_OK_ICON_PATH if path_exists else TOOL_STATUS_ERROR_ICON_PATH)).scaled(
+            16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        ))
+        status.setToolTip("工具文件存在" if path_exists else "工具文件不存在或未配置")
+        title_row.addWidget(status)
+
         title = QLabel(str(configuration["name"]))
         title.setObjectName("toolCardTitle")
         title.setToolTip(str(configuration["name"]))
         title.setWordWrap(False)
         title.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(title)
+        title_row.addWidget(title, 1)
+
+        star_button = QToolButton()
+        star_button.setObjectName("toolCardStar")
+        starred = bool(configuration["star"])
+        star_button.setIcon(QIcon(str(TOOL_STARRED_ICON_PATH if starred else TOOL_UNSTARRED_ICON_PATH)))
+        star_button.setIconSize(QSize(18, 18))
+        star_button.setToolTip("取消收藏" if starred else "收藏工具")
+        star_button.clicked.connect(lambda: on_star_changed(configuration, not starred))
+        title_row.addWidget(star_button)
+        layout.addLayout(title_row)
 
         description = QLabel(str(configuration["description"]))
         description.setObjectName("toolCardDescription")
@@ -457,6 +488,10 @@ class ToolCard(QFrame):
         category.setToolTip(str(configuration["category"]))
         footer.addWidget(tool_type)
         footer.addWidget(category, 1)
+        run_button = QPushButton("运行")
+        run_button.setObjectName("toolCardRun")
+        run_button.setToolTip("运行功能尚未实现")
+        footer.addWidget(run_button)
         layout.addLayout(footer)
 
 
@@ -594,7 +629,7 @@ class MainWindow(QMainWindow):
                 category_counts[category] += 1
         sidebar_items = [
             (ALL_TOOLS_ICON_PATH, f"全部工具 ({len(tool_configurations)})", "all"),
-            (FAVORITES_ICON_PATH, "我的收藏", "favorites"),
+            (FAVORITES_ICON_PATH, f"我的收藏 ({sum(bool(tool['star']) for tool in tool_configurations)})", "favorites"),
             (RECENT_TOOLS_ICON_PATH, "最近使用", "recent"),
             *[(TOOLS_MENU_ICON_PATH, f"{name} ({category_counts[name]})", f"category:{name}") for name in category_names],
         ]
@@ -604,6 +639,7 @@ class MainWindow(QMainWindow):
             sidebar.addItem(item)
         sidebar.setCurrentRow(0)
         sidebar.currentItemChanged.connect(self._show_tools_for_menu)
+        self._sidebar = sidebar
         sidebar_layout.addWidget(sidebar)
         layout.addWidget(sidebar_panel)
 
@@ -659,9 +695,13 @@ class MainWindow(QMainWindow):
             #toolCard { background: #ffffff; border: 1px solid #dce2ec; border-radius: 12px; }
             #toolCard:hover { border-color: #9cc5f5; background: #fafdff; }
             #toolCardTitle { color: #182033; font-size: 15px; font-weight: 700; }
+            #toolCardStatus { background: transparent; }
+            #toolCardStar { min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0; border: none; border-radius: 5px; background: transparent; }
+            #toolCardStar:hover { background: #eef4fb; }
             #toolCardDescription { color: #64748b; font-size: 12px; }
             #toolCardType { color: #1677e8; font-size: 11px; font-weight: 600; background: #e8f1ff; border-radius: 4px; padding: 2px 6px; }
             #toolCardCategory { color: #64748b; font-size: 11px; }
+            #toolCardRun { min-height: 24px; padding: 0 8px; border-radius: 5px; font-size: 11px; }
             #emptyState { background: #ffffff; border: 1px dashed #d5deea; border-radius: 12px; } #emptyTitle { color: #243047; font-size: 20px; font-weight: 700; } #emptyHint { color: #7c8798; font-size: 13px; }
         """)
         self._show_tools_for_menu(sidebar.currentItem())
@@ -680,16 +720,17 @@ class MainWindow(QMainWindow):
             category = menu_key.removeprefix("category:")
             selected_tools = [tool for tool in configurations if tool["category"] == category]
             title = f"{category} ({len(selected_tools)})"
+        elif menu_key == "favorites":
+            selected_tools = [tool for tool in configurations if bool(tool["star"])]
+            title = f"我的收藏 ({len(selected_tools)})"
         else:
-            # 收藏和最近使用的交互尚未实现，保留页面入口但不混入分类结果。
-            title = "我的收藏" if menu_key == "favorites" else "最近使用"
+            title = "最近使用"
             selected_tools = []
 
         selected_tools.sort(key=lambda tool: (-int(tool["weight"]), str(tool["name"])))
         self._tool_scroll.setWidget(self._create_tools_widget(selected_tools, title))
 
-    @staticmethod
-    def _create_tools_widget(tools: list[dict[str, object]], title: str) -> QWidget:
+    def _create_tools_widget(self, tools: list[dict[str, object]], title: str) -> QWidget:
         """构建卡片网格；卡片本身固定为 200 × 140，便于通过 QSS 定制。"""
 
         if not tools:
@@ -717,8 +758,21 @@ class MainWindow(QMainWindow):
         # 最小工作区可容纳三张 200px 卡片；固定列数也使卡片间距稳定、易于定制。
         columns = 3
         for index, configuration in enumerate(tools):
-            grid.addWidget(ToolCard(configuration), index // columns, index % columns)
+            grid.addWidget(ToolCard(configuration, self._set_tool_star), index // columns, index % columns)
         return grid_widget
+
+    def _set_tool_star(self, configuration: dict[str, object], starred: bool) -> None:
+        """保存收藏状态，并刷新当前列表和左侧收藏计数。"""
+
+        self._config_store.set_tool_configuration_star(configuration, starred)
+        configurations = self._config_store.load_tool_configurations()
+        favorite_count = sum(bool(tool["star"]) for tool in configurations)
+        for index in range(self._sidebar.count()):
+            item = self._sidebar.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == "favorites":
+                item.setText(f"我的收藏 ({favorite_count})")
+                break
+        self._show_tools_for_menu(self._sidebar.currentItem())
 
     def show_settings(self) -> None:
         """显示独立的模态系统设置窗口。"""
