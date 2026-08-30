@@ -17,9 +17,17 @@ class ConfigStore:
     CATEGORIES_PATH = CONFIG_DIR / "categories.json"
     TOOLS_PATH = CONFIG_DIR / "tools.json"
 
+    # sec-forge.py 位于项目根目录，运行时环境目录与它同级。
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    _DEFAULT_ENVIRONMENT_PATHS = {
+        "python_path": str(PROJECT_ROOT / "env" / "python3" / "python.exe"),
+        "java8_path": str(PROJECT_ROOT / "env" / "Java_path" / "Java_8_win" / "bin"),
+        "java11_path": str(PROJECT_ROOT / "env" / "Java_path" / "Java_11_win" / "bin"),
+    }
     _DEFAULT_SETTINGS = {
         "schema_version": SCHEMA_VERSION,
         "general": {"minimize_to_tray_on_close": True},
+        **_DEFAULT_ENVIRONMENT_PATHS,
     }
     _DEFAULT_CATEGORIES = {
         "schema_version": SCHEMA_VERSION,
@@ -49,6 +57,7 @@ class ConfigStore:
         for path, content in default_files.items():
             if not path.exists():
                 self._write_json(path, content)
+        self._ensure_environment_defaults()
 
     def load_settings(self) -> dict[str, object]:
         """读取系统设置；缺失的设置文件会先按默认值创建。"""
@@ -76,6 +85,33 @@ class ConfigStore:
             general = {}
             settings["general"] = general
         general["minimize_to_tray_on_close"] = enabled
+        self._write_json(self.SETTINGS_PATH, settings)
+
+    def environment_paths(self) -> dict[str, str]:
+        """返回环境页展示的路径；无效值回退为项目内的默认路径。"""
+
+        settings = self.load_settings()
+        return {
+            key: value if isinstance(value := settings.get(key), str) else default
+            for key, default in self.default_environment_paths().items()
+        }
+
+    def default_environment_paths(self) -> dict[str, str]:
+        """返回项目根目录下预置运行时环境的默认绝对路径。"""
+
+        return self._DEFAULT_ENVIRONMENT_PATHS.copy()
+
+    def set_environment_paths(self, *, python_path: str, java8_path: str, java11_path: str) -> None:
+        """保存用户在环境页选择的 Python 和 Java 路径。"""
+
+        settings = self.load_settings()
+        settings.update(
+            {
+                "python_path": python_path,
+                "java8_path": java8_path,
+                "java11_path": java11_path,
+            }
+        )
         self._write_json(self.SETTINGS_PATH, settings)
 
     def load_category_names(self) -> list[str]:
@@ -116,6 +152,19 @@ class ConfigStore:
     def _validate_schema(self, raw: dict[str, object]) -> None:
         if raw.get("schema_version") != self.SCHEMA_VERSION:
             raise ValueError("不支持的配置文件版本")
+
+    def _ensure_environment_defaults(self) -> None:
+        """为旧版 settings.json 补充环境路径，保留用户已经保存的值。"""
+
+        settings = self._read_json(self.SETTINGS_PATH)
+        self._validate_schema(settings)
+        changed = False
+        for key, default in self._DEFAULT_ENVIRONMENT_PATHS.items():
+            if key not in settings:
+                settings[key] = default
+                changed = True
+        if changed:
+            self._write_json(self.SETTINGS_PATH, settings)
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, object]:

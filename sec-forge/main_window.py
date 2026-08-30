@@ -7,7 +7,7 @@ from ctypes import c_void_p, wintypes
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -171,7 +171,22 @@ class SettingsDialog(QDialog):
         self._minimize_to_tray_checkbox.setChecked(self._config_store.minimize_to_tray_on_close())
         general_layout.addWidget(self._minimize_to_tray_checkbox)
         tabs.addTab(general_page, "常规")
-        tabs.addTab(QWidget(), "环境")
+        environment_page = QWidget()
+        environment_layout = QVBoxLayout(environment_page)
+        environment_layout.setContentsMargins(22, 22, 22, 22)
+        environment_layout.setSpacing(10)
+        environment_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        environment_paths = self._config_store.environment_paths()
+        self._python_path_input = self._add_environment_path_setting(
+            environment_layout, "自定义Python路径", environment_paths["python_path"], select_directory=False
+        )
+        self._java8_path_input = self._add_environment_path_setting(
+            environment_layout, "Java 8路径", environment_paths["java8_path"], select_directory=True
+        )
+        self._java11_path_input = self._add_environment_path_setting(
+            environment_layout, "Java 11路径", environment_paths["java11_path"], select_directory=True
+        )
+        tabs.addTab(environment_page, "环境")
         tabs.addTab(QWidget(), "关于")
         body.addWidget(tabs, 1)
 
@@ -215,21 +230,67 @@ class SettingsDialog(QDialog):
             QCheckBox { color: #243047; font-size: 14px; spacing: 8px; }
             QCheckBox::indicator { width: 17px; height: 17px; border: 1px solid #b9c5d5; border-radius: 4px; background: #ffffff; }
             QCheckBox::indicator:checked { background: #1677e8; border-color: #1677e8; }
+            #environmentLabel { color: #243047; font-size: 14px; font-weight: 600; }
             QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; }
             QPushButton:hover { background: #3689ec; }
             #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; }
             #secondaryButton:hover { color: #1677e8; border-color: #9cc5f5; background: #f4f8fe; }
         """)
 
+    def _add_environment_path_setting(
+        self, layout: QVBoxLayout, label_text: str, path: str, *, select_directory: bool
+    ) -> QLineEdit:
+        """在环境页添加标签单行、输入框与浏览按钮单行的路径设置。"""
+
+        label = QLabel(label_text)
+        label.setObjectName("environmentLabel")
+        layout.addWidget(label)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        path_input = QLineEdit(path)
+        path_input.setPlaceholderText("请选择路径")
+        browse_button = QPushButton("浏览")
+        browse_button.setObjectName("secondaryButton")
+        browse_button.clicked.connect(
+            lambda: self._browse_environment_path(path_input, label_text, select_directory)
+        )
+        row.addWidget(path_input, 1)
+        row.addWidget(browse_button)
+        layout.addLayout(row)
+        return path_input
+
+    def _browse_environment_path(
+        self, path_input: QLineEdit, label_text: str, select_directory: bool
+    ) -> None:
+        """按设置项选择文件或文件夹，并把绝对路径显示到对应输入框。"""
+
+        if select_directory:
+            selected_path = QFileDialog.getExistingDirectory(self, f"选择{label_text}", path_input.text())
+        else:
+            selected_path, _ = QFileDialog.getOpenFileName(
+                self, f"选择{label_text}", path_input.text(), "所有文件 (*)"
+            )
+        if selected_path:
+            path_input.setText(str(Path(selected_path).resolve()))
+
     def _reset_settings(self) -> None:
         """将页面中的设置项恢复为默认值，等待用户确认保存。"""
 
         self._minimize_to_tray_checkbox.setChecked(True)
+        environment_paths = self._config_store.default_environment_paths()
+        self._python_path_input.setText(environment_paths["python_path"])
+        self._java8_path_input.setText(environment_paths["java8_path"])
+        self._java11_path_input.setText(environment_paths["java11_path"])
 
     def _save_settings(self) -> None:
         """保存当前设置并关闭对话框。"""
 
         self._config_store.set_minimize_to_tray_on_close(self._minimize_to_tray_checkbox.isChecked())
+        self._config_store.set_environment_paths(
+            python_path=self._python_path_input.text(),
+            java8_path=self._java8_path_input.text(),
+            java11_path=self._java11_path_input.text(),
+        )
         self.accept()
 
 
