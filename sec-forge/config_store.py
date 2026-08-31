@@ -238,6 +238,37 @@ class ConfigStore:
                 return
         raise ValueError("未找到要更新收藏状态的工具配置")
 
+    def update_tool_configuration(
+        self, original: dict[str, object], updated: dict[str, object]
+    ) -> None:
+        """用 ``updated`` 替换一条已有工具配置并立即保存。
+
+        工具清单暂未使用独立 ID，因此沿用收藏功能的完整配置匹配规则：
+        当存在完全重复的记录时，始终更新列表中的第一条记录。
+        """
+
+        records = self.load_tool_configurations()
+        for index, record in enumerate(records):
+            if record == original:
+                records[index] = updated
+                self.save_tool_configurations(records)
+                return
+        raise ValueError("未找到要编辑的工具配置")
+
+    def delete_tool_configuration(self, configuration: dict[str, object]) -> None:
+        """删除一条已有工具配置并立即同步到 ``tools.json``。
+
+        完全重复的记录按列表顺序只删除第一条，以保持操作结果可预测。
+        """
+
+        records = self.load_tool_configurations()
+        for index, record in enumerate(records):
+            if record == configuration:
+                del records[index]
+                self.save_tool_configurations(records)
+                return
+        raise ValueError("未找到要删除的工具配置")
+
     def load_tools(self) -> list[Tool]:
         """将用户配置转换为既有领域模型，保持旧调用方兼容。"""
 

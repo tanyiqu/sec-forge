@@ -6,9 +6,9 @@ from typing import Callable
 import sys
 from ctypes import c_void_p, wintypes
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PyQt6.QtGui import QCloseEvent, QCursor, QIcon, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea, QTabWidget, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl
+from PyQt6.QtGui import QCloseEvent, QCursor, QDesktopServices, QIcon, QMouseEvent, QPixmap
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QTabWidget, QToolButton, QVBoxLayout, QWidget
 
 from config_store import ConfigStore
 from resource_monitor import ProcessResourceMonitor
@@ -300,14 +300,22 @@ class SettingsDialog(QDialog):
 
 
 class AddToolDialog(QDialog):
-    """收集并校验本地工具启动信息的模态窗口。"""
+    """收集并校验新增或编辑的本地工具启动信息。"""
 
     _TOOL_TYPES = ("Python", "Java8", "Java11", "GUI应用", "命令行", "批处理", "Powershell", "网页")
 
-    def __init__(self, config_store: ConfigStore, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        parent: QWidget | None = None,
+        configuration: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._config_store = config_store
-        self.setWindowTitle("添加工具")
+        self._original_configuration = configuration
+        self._is_editing = configuration is not None
+        self._dialog_title = "编辑工具" if self._is_editing else "添加工具"
+        self.setWindowTitle(self._dialog_title)
         self.setModal(True)
         self.setFixedWidth(510)
         self._build_ui()
@@ -316,7 +324,7 @@ class AddToolDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
-        title = QLabel("添加工具")
+        title = QLabel(self._dialog_title)
         title.setObjectName("dialogTitle")
         layout.addWidget(title)
 
@@ -348,6 +356,8 @@ class AddToolDialog(QDialog):
         self._weight_selector = QComboBox()
         self._weight_selector.addItems([str(weight) for weight in range(11)])
         self._weight_selector.setCurrentText("0")
+        if self._original_configuration is not None:
+            self._populate_inputs(self._original_configuration)
         form.addRow("工具名称：", self._name_input)
         form.addRow("工具描述：", self._description_input)
         form.addRow("工具类型：", self._type_selector)
@@ -392,6 +402,21 @@ class AddToolDialog(QDialog):
         self.adjustSize()
         self.setFixedHeight(self.sizeHint().height())
 
+    def _populate_inputs(self, configuration: dict[str, object]) -> None:
+        """将既有配置回填到编辑表单，保留未知分类的可见性。"""
+
+        self._name_input.setText(str(configuration["name"]))
+        self._description_input.setText(str(configuration["description"]))
+        self._type_selector.setCurrentText(str(configuration["type"]))
+        self._path_input.setText(str(configuration["path"]))
+        self._url_input.setText(str(configuration["url"]))
+        category = str(configuration["category"])
+        if self._category_selector.findText(category) == -1:
+            self._category_selector.addItem(category)
+        self._category_selector.setCurrentText(category)
+        self._params_input.setText(str(configuration["params"]))
+        self._weight_selector.setCurrentText(str(configuration["weight"]))
+
     def _browse_path(self) -> None:
         """用不限文件类型的选择器填充工具路径。"""
 
@@ -412,7 +437,7 @@ class AddToolDialog(QDialog):
             target_name = "网页 URL" if is_web_tool else "工具路径"
             QMessageBox.warning(self, "信息不完整", f"请填写工具名称、{target_name}和工具分类。")
             return
-        self._config_store.add_tool_configuration({
+        configuration = {
             "name": name,
             "category": category,
             "type": tool_type,
@@ -421,7 +446,13 @@ class AddToolDialog(QDialog):
             "params": self._params_input.text().strip(),
             "url": url if is_web_tool else "",
             "weight": int(self._weight_selector.currentText()),
-        })
+        }
+        if self._original_configuration is None:
+            self._config_store.add_tool_configuration(configuration)
+        else:
+            # 编辑表单不展示收藏状态，保存时仍应保留用户原有的收藏选择。
+            configuration["star"] = bool(self._original_configuration["star"])
+            self._config_store.update_tool_configuration(self._original_configuration, configuration)
         self.accept()
 
 
@@ -435,9 +466,16 @@ class ToolCard(QFrame):
         self,
         configuration: dict[str, object],
         on_star_changed: Callable[[dict[str, object], bool], None],
+        on_edit: Callable[[dict[str, object]], None],
+        on_delete: Callable[[dict[str, object]], None],
+        on_open_folder: Callable[[dict[str, object]], None],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._configuration = configuration
+        self._on_edit = on_edit
+        self._on_delete = on_delete
+        self._on_open_folder = on_open_folder
         self.setObjectName("toolCard")
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         layout = QVBoxLayout(self)
@@ -493,6 +531,18 @@ class ToolCard(QFrame):
         run_button.setToolTip("运行功能尚未实现")
         footer.addWidget(run_button)
         layout.addLayout(footer)
+
+    def contextMenuEvent(self, event) -> None:
+        """显示工具卡片的快捷操作菜单；运行项暂不绑定实际启动逻辑。"""
+
+        menu = QMenu(self)
+        menu.addAction("运行")
+        menu.addSeparator()
+        menu.addAction("编辑", lambda: self._on_edit(self._configuration))
+        menu.addAction("删除", lambda: self._on_delete(self._configuration))
+        menu.addSeparator()
+        menu.addAction("打开所在的文件夹", lambda: self._on_open_folder(self._configuration))
+        menu.exec(event.globalPos())
 
 
 class MainWindow(QMainWindow):
@@ -651,11 +701,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(divider)
 
         content = QVBoxLayout()
-        content.setContentsMargins(24, 20, 24, 22)
+        # 右侧不预留外边距，使工具区的滚动条轨道贴合窗口右边框；
+        # 顶部操作区单独保留右侧留白，以维持现有视觉对齐。
+        content.setContentsMargins(24, 20, 0, 22)
         content.setSpacing(14)
         search = QLineEdit()
         search.setPlaceholderText("搜索名称 / 标签 / 描述")
         action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 24, 0)
         action_row.addWidget(search, 1)
         add_button = QPushButton("+ 添加工具")
         add_button.setToolTip("添加本地工具或网页工具")
@@ -669,6 +722,8 @@ class MainWindow(QMainWindow):
         self._tool_scroll = QScrollArea()
         self._tool_scroll.setObjectName("contentArea")
         self._tool_scroll.setWidgetResizable(True)
+        self._tool_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._tool_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         content.addWidget(self._tool_scroll)
         layout.addLayout(content, 1)
         surface_layout.addWidget(root, 1)
@@ -691,6 +746,14 @@ class MainWindow(QMainWindow):
             QPushButton { min-height: 36px; padding: 0 15px; background: #1677e8; border: none; border-radius: 8px; color: white; font-weight: 600; } QPushButton:hover { background: #3689ec; } QPushButton:disabled { background: #9fc8f5; color: #f7fbff; }
             #secondaryButton { color: #45536a; background: #ffffff; border: 1px solid #d9e0ea; } #secondaryButton:hover { color: #1677e8; border-color: #9cc5f5; background: #f4f8fe; }
             #contentArea { border: none; background: transparent; } #contentArea > QWidget > QWidget { background: transparent; }
+            #contentArea QScrollBar:vertical { width: 10px; background: transparent; margin: 8px 0; }
+            #contentArea QScrollBar::handle:vertical { min-height: 48px; margin: 0 2px; border-radius: 3px; background: #b8c6d9; }
+            #contentArea QScrollBar::handle:vertical:hover { background: #8ea9c8; }
+            #contentArea QScrollBar::handle:vertical:pressed { background: #6e91ba; }
+            #contentArea QScrollBar::add-line:vertical, #contentArea QScrollBar::sub-line:vertical { height: 0; }
+            #contentArea QScrollBar::add-page:vertical, #contentArea QScrollBar::sub-page:vertical { background: transparent; }
+            #contentArea QScrollBar::up-arrow:vertical, #contentArea QScrollBar::down-arrow:vertical { width: 0; height: 0; }
+            #contentArea::corner { background: transparent; border: none; }
             #toolGrid { background: transparent; }
             #toolCard { background: #ffffff; border: 1px solid #dce2ec; border-radius: 12px; }
             #toolCard:hover { border-color: #9cc5f5; background: #fafdff; }
@@ -758,7 +821,17 @@ class MainWindow(QMainWindow):
         # 最小工作区可容纳三张 200px 卡片；固定列数也使卡片间距稳定、易于定制。
         columns = 3
         for index, configuration in enumerate(tools):
-            grid.addWidget(ToolCard(configuration, self._set_tool_star), index // columns, index % columns)
+            grid.addWidget(
+                ToolCard(
+                    configuration,
+                    self._set_tool_star,
+                    self._edit_tool_configuration,
+                    self._delete_tool_configuration,
+                    self._open_tool_folder,
+                ),
+                index // columns,
+                index % columns,
+            )
         return grid_widget
 
     def _set_tool_star(self, configuration: dict[str, object], starred: bool) -> None:
@@ -773,6 +846,41 @@ class MainWindow(QMainWindow):
                 item.setText(f"我的收藏 ({favorite_count})")
                 break
         self._show_tools_for_menu(self._sidebar.currentItem())
+
+    def _edit_tool_configuration(self, configuration: dict[str, object]) -> None:
+        """以卡片配置打开编辑表单，成功保存后重建界面同步所有计数。"""
+
+        if AddToolDialog(self._config_store, self, configuration).exec() == QDialog.DialogCode.Accepted:
+            self._build_ui()
+
+    def _delete_tool_configuration(self, configuration: dict[str, object]) -> None:
+        """经用户确认后删除当前工具配置。"""
+
+        answer = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除工具“{configuration['name']}”吗？此操作会同步更新 tools.json。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._config_store.delete_tool_configuration(configuration)
+            self._build_ui()
+
+    def _open_tool_folder(self, configuration: dict[str, object]) -> None:
+        """打开本地工具所在目录；网页工具及失效路径会给出明确提示。"""
+
+        path_text = str(configuration["path"]).strip()
+        if not path_text:
+            QMessageBox.warning(self, "无法打开文件夹", "该工具未配置本地工具路径。")
+            return
+        tool_path = Path(path_text)
+        folder = tool_path if tool_path.is_dir() else tool_path.parent
+        if not folder.is_dir():
+            QMessageBox.warning(self, "文件夹不存在", f"工具所在的文件夹不存在：\n{folder}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            QMessageBox.warning(self, "无法打开文件夹", f"无法打开工具所在的文件夹：\n{folder}")
 
     def show_settings(self) -> None:
         """显示独立的模态系统设置窗口。"""
