@@ -545,6 +545,90 @@ class ToolCard(QFrame):
         menu.exec(event.globalPos())
 
 
+class ResponsiveToolGrid(QWidget):
+    """随可用宽度自动调整列数、并居中展示固定尺寸工具卡片的网格。"""
+
+    _MARGIN = 2
+    _HORIZONTAL_SPACING = 16
+    _VERTICAL_SPACING = 16
+
+    def __init__(self, cards: list[ToolCard], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._cards = cards
+        self._columns = 0
+        self.setObjectName("toolGrid")
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
+        self._grid.setHorizontalSpacing(self._HORIZONTAL_SPACING)
+        self._grid.setVerticalSpacing(self._VERTICAL_SPACING)
+        self._relayout_cards()
+
+    def resizeEvent(self, event) -> None:
+        """视口宽度变化时，仅在列数变化后重新排列已有卡片。"""
+
+        super().resizeEvent(event)
+        self._relayout_cards()
+
+    def sizeHint(self) -> QSize:
+        """让滚动区域以视口宽度为准，避免旧列数的推荐宽度阻止网格缩小。"""
+
+        return QSize(0, self._grid.sizeHint().height())
+
+    def _column_count_for_width(self) -> int:
+        """计算当前可用宽度可完整容纳的卡片列数，至少保留一列。"""
+
+        available_width = max(0, self.width() - self._grid.contentsMargins().left() - self._grid.contentsMargins().right())
+        card_with_spacing = ToolCard.WIDTH + self._HORIZONTAL_SPACING
+        return max(1, (available_width + self._HORIZONTAL_SPACING) // card_with_spacing)
+
+    def _relayout_cards(self) -> None:
+        """按当前列数重建网格位置，不改变卡片尺寸或卡片间距。"""
+
+        columns = self._column_count_for_width()
+        if columns == self._columns:
+            return
+        self._columns = columns
+        horizontal_alignment = (
+            Qt.AlignmentFlag.AlignLeft
+            if len(self._cards) < columns
+            else Qt.AlignmentFlag.AlignHCenter
+        )
+        # 未占满当前可容纳的列数时从左向右排列；否则在剩余空间中整体居中。
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | horizontal_alignment)
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for index, card in enumerate(self._cards):
+            self._grid.addWidget(card, index // columns, index % columns)
+        self._grid.invalidate()
+        self.updateGeometry()
+
+
+class ToolScrollArea(QScrollArea):
+    """始终使用视口宽度的工具卡片滚动区域。"""
+
+    def setWidget(self, widget: QWidget | None) -> None:
+        """设置内容后立即按当前视口宽度同步响应式网格。"""
+
+        super().setWidget(widget)
+        self._resize_tool_grid_to_viewport()
+
+    def resizeEvent(self, event) -> None:
+        """视口变宽或变窄时强制同步网格宽度，避免沿用旧列数的尺寸提示。"""
+
+        super().resizeEvent(event)
+        self._resize_tool_grid_to_viewport()
+
+    def _resize_tool_grid_to_viewport(self) -> None:
+        """让网格使用实际视口宽度，从而支持缩小时减少列数。"""
+
+        grid = self.widget()
+        if isinstance(grid, ResponsiveToolGrid):
+            viewport_width = self.viewport().width()
+            # 先更新宽度以触发列数重排，再读取重排后的高度提示，避免新增行被压缩。
+            grid.resize(viewport_width, grid.height())
+            grid.resize(viewport_width, grid.sizeHint().height())
+
+
 class MainWindow(QMainWindow):
     """SecForge 主窗口，包含固定导航栏和可缩放的工作区。"""
 
@@ -719,9 +803,10 @@ class MainWindow(QMainWindow):
         settings_button.clicked.connect(self.show_settings)
         action_row.addWidget(settings_button)
         content.addLayout(action_row)
-        self._tool_scroll = QScrollArea()
+        self._tool_scroll = ToolScrollArea()
         self._tool_scroll.setObjectName("contentArea")
-        self._tool_scroll.setWidgetResizable(True)
+        # 由 ToolScrollArea 按视口宽度控制网格，避免 QScrollArea 以旧列数的 sizeHint 锁定宽度。
+        self._tool_scroll.setWidgetResizable(False)
         self._tool_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tool_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         content.addWidget(self._tool_scroll)
@@ -811,28 +896,17 @@ class MainWindow(QMainWindow):
             empty_layout.addWidget(hint, alignment=Qt.AlignmentFlag.AlignCenter)
             return empty
 
-        grid_widget = QWidget()
-        grid_widget.setObjectName("toolGrid")
-        grid = QGridLayout(grid_widget)
-        grid.setContentsMargins(2, 2, 2, 2)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(16)
-        grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        # 最小工作区可容纳三张 200px 卡片；固定列数也使卡片间距稳定、易于定制。
-        columns = 3
-        for index, configuration in enumerate(tools):
-            grid.addWidget(
-                ToolCard(
-                    configuration,
-                    self._set_tool_star,
-                    self._edit_tool_configuration,
-                    self._delete_tool_configuration,
-                    self._open_tool_folder,
-                ),
-                index // columns,
-                index % columns,
+        cards = [
+            ToolCard(
+                configuration,
+                self._set_tool_star,
+                self._edit_tool_configuration,
+                self._delete_tool_configuration,
+                self._open_tool_folder,
             )
-        return grid_widget
+            for configuration in tools
+        ]
+        return ResponsiveToolGrid(cards)
 
     def _set_tool_star(self, configuration: dict[str, object], starred: bool) -> None:
         """保存收藏状态，并刷新当前列表和左侧收藏计数。"""
