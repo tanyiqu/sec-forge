@@ -272,6 +272,12 @@ class ConfigStore:
     def load_tools(self) -> list[Tool]:
         """将用户配置转换为既有领域模型，保持旧调用方兼容。"""
 
+        return [self.tool_from_configuration(item) for item in self.load_tool_configurations()]
+
+    @staticmethod
+    def tool_from_configuration(item: dict[str, object]) -> Tool:
+        """将一条界面使用的扁平配置转换为启动器使用的领域模型。"""
+
         launch_types = {
             "Python": LaunchType.PYTHON,
             "Java8": LaunchType.JAVA_8,
@@ -282,17 +288,18 @@ class ConfigStore:
             "Powershell": LaunchType.POWERSHELL,
             "网页": LaunchType.WEB,
         }
-        return [
-            Tool(
-                name=item["name"],
-                category_id=item["category"],
-                launch_type=launch_types.get(item["type"], LaunchType.GUI),
-                profile=ToolProfile(target=item["url"] or item["path"], arguments=item["params"]),
-                description=item["description"],
-                weight=self._normalize_weight(item["weight"]),
-            )
-            for item in self.load_tool_configurations()
-        ]
+        return Tool(
+            name=str(item.get("name", "")),
+            category_id=str(item.get("category", "")),
+            launch_type=launch_types.get(str(item.get("type", "")), LaunchType.GUI),
+            profile=ToolProfile(
+                target=str(item.get("url") or item.get("path", "")),
+                arguments=str(item.get("params", "")),
+            ),
+            description=str(item.get("description", "")),
+            favorite=bool(item.get("star", False)),
+            weight=ConfigStore._normalize_weight(item.get("weight", 0)),
+        )
 
     def save_tools(self, tools: list[Tool]) -> None:
         type_names = {

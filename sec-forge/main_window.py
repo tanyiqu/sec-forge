@@ -26,6 +26,7 @@ from resources import (
     TOOL_UNSTARRED_ICON_PATH,
     TOOLS_MENU_ICON_PATH,
 )
+from windows import LaunchError, WindowsLauncher
 
 
 class TitleBar(QFrame):
@@ -466,6 +467,7 @@ class ToolCard(QFrame):
         self,
         configuration: dict[str, object],
         on_star_changed: Callable[[dict[str, object], bool], None],
+        on_run: Callable[[dict[str, object]], None],
         on_edit: Callable[[dict[str, object]], None],
         on_delete: Callable[[dict[str, object]], None],
         on_open_folder: Callable[[dict[str, object]], None],
@@ -473,6 +475,7 @@ class ToolCard(QFrame):
     ) -> None:
         super().__init__(parent)
         self._configuration = configuration
+        self._on_run = on_run
         self._on_edit = on_edit
         self._on_delete = on_delete
         self._on_open_folder = on_open_folder
@@ -484,13 +487,20 @@ class ToolCard(QFrame):
 
         title_row = QHBoxLayout()
         title_row.setSpacing(6)
-        path_exists = bool(str(configuration["path"])) and Path(str(configuration["path"])).exists()
+        is_web = str(configuration["type"]) == "网页"
+        path_exists = bool(str(configuration["url"]).strip()) if is_web else (
+            bool(str(configuration["path"]).strip()) and Path(str(configuration["path"])).is_file()
+        )
         status = QLabel()
         status.setObjectName("toolCardStatus")
         status.setPixmap(QPixmap(str(TOOL_STATUS_OK_ICON_PATH if path_exists else TOOL_STATUS_ERROR_ICON_PATH)).scaled(
             16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         ))
-        status.setToolTip("工具文件存在" if path_exists else "工具文件不存在或未配置")
+        status.setToolTip(
+            "网页 URL 已配置" if is_web and path_exists else
+            "网页 URL 未配置" if is_web else
+            "工具文件存在" if path_exists else "工具文件不存在或未配置"
+        )
         title_row.addWidget(status)
 
         title = QLabel(str(configuration["name"]))
@@ -528,15 +538,16 @@ class ToolCard(QFrame):
         footer.addWidget(category, 1)
         run_button = QPushButton("运行")
         run_button.setObjectName("toolCardRun")
-        run_button.setToolTip("运行功能尚未实现")
+        run_button.setToolTip("运行该工具")
+        run_button.clicked.connect(lambda: self._on_run(self._configuration))
         footer.addWidget(run_button)
         layout.addLayout(footer)
 
     def contextMenuEvent(self, event) -> None:
-        """显示工具卡片的快捷操作菜单；运行项暂不绑定实际启动逻辑。"""
+        """显示工具卡片的快捷操作菜单。"""
 
         menu = QMenu(self)
-        menu.addAction("运行")
+        menu.addAction("运行", lambda: self._on_run(self._configuration))
         menu.addSeparator()
         menu.addAction("编辑", lambda: self._on_edit(self._configuration))
         menu.addAction("删除", lambda: self._on_delete(self._configuration))
@@ -900,6 +911,7 @@ class MainWindow(QMainWindow):
             ToolCard(
                 configuration,
                 self._set_tool_star,
+                self._run_tool_configuration,
                 self._edit_tool_configuration,
                 self._delete_tool_configuration,
                 self._open_tool_folder,
@@ -907,6 +919,16 @@ class MainWindow(QMainWindow):
             for configuration in tools
         ]
         return ResponsiveToolGrid(cards)
+
+    def _run_tool_configuration(self, configuration: dict[str, object]) -> None:
+        """让卡片按钮和右键菜单通过同一启动入口运行工具。"""
+
+        tool = self._config_store.tool_from_configuration(configuration)
+        launcher = WindowsLauncher(self._config_store.environment_paths())
+        try:
+            launcher.launch(tool)
+        except LaunchError as error:
+            QMessageBox.warning(self, "无法运行工具", str(error))
 
     def _set_tool_star(self, configuration: dict[str, object], starred: bool) -> None:
         """保存收藏状态，并刷新当前列表和左侧收藏计数。"""
